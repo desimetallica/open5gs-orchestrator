@@ -1,0 +1,85 @@
+---
+- hosts: UERANSIM
+  #  become_user: crit
+  become: true
+
+  pre_tasks:
+    - name: Update apt cache if needed.
+      apt: update_cache=true cache_valid_time=3600
+      
+    - name: Upgrade all packages to their latest version
+      apt:
+        name: "*"
+        state: latest
+      
+  handlers:
+    - name: daemon-reload
+      ansible.builtin.systemd:
+        daemon_reload: yes
+      listen: "reload and restart"
+
+    - name: restart open5gs-webui
+      service:
+        name: open5gs-webui
+        state: restarted
+      listen: "reload and restart"
+
+  tasks:
+    - name: Install pre-packages.
+      apt:
+        pkg:
+        - software-properties-common
+        - curl
+
+    - name: adding open5gs latest repository from PPA and istall its signing key on Ubuntu target.
+      ansible.builtin.apt_repository:
+        repo: ppa:open5gs/latest
+
+    - name: update cache and install open5gs package
+      apt:
+        name: open5gs
+        update_cache: yes
+        
+    - name: add node_14.x source
+      shell: 'curl -fsSL https://deb.nodesource.com/setup_14.x | sudo -E bash -'
+
+    - name: install nodejs packages
+      apt:
+        name: nodejs
+        update_cache: yes
+
+    - name: install open5gs webui
+      shell: 'curl -fsSL https://open5gs.org/open5gs/assets/webui/install | sudo -E bash -' 
+
+    # file module will create a directory if missing
+    - name: Create open5gs-webui.service.d directory
+      file:
+        path: /etc/systemd/system/open5gs-webui.service.d/
+        state: directory
+        owner: root
+        group: root
+        mode: 0755
+
+    # template module will create a file
+    - name: Copy open5gs-webui.service drop-in
+      copy:
+        src: /lib/systemd/system/open5gs-webui.service
+        dest: /etc/systemd/system/open5gs-webui.service.d/override.conf
+        owner: root
+        group: root
+        remote_src: yes
+        mode: 0644
+
+    - name: Ensure open5gs-webui service listen on al interfaces
+      lineinfile:
+        path: /etc/systemd/system/open5gs-webui.service.d/override.conf 
+        insertafter: 'Environment=NODE_ENV=production'
+        line: 'Environment=HOSTNAME="0.0.0.0"' 
+
+    - name: Fixing the override.conf file and reloading the services config files
+      lineinfile:
+        path: /etc/systemd/system/open5gs-webui.service.d/override.conf 
+        insertafter: 'Environment=HOSTNAME="0.0.0.0"'
+        line: 'ExecStart=' 
+      notify: "reload and restart"
+
