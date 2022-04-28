@@ -34,7 +34,7 @@ resource "openstack_compute_instance_v2" "test-server" {
   availability_zone = "dl580"
   network {
     name =  "${openstack_networking_network_v2.network_1.name}" 
-    #port = openstack_networking_port_v2.port_1.id
+    port = element(openstack_networking_port_v2.port.*.id, count.index + 1)
   }
 }
 
@@ -59,10 +59,22 @@ resource "openstack_networking_network_v2" "network_1" {
 }
 
 resource "openstack_networking_subnet_v2" "subnet_1" {
-  name       = "subnet_1"
+  name       = "open5gs-subnet"
   network_id = "${openstack_networking_network_v2.network_1.id}"
   cidr       = "192.168.199.0/24"
   ip_version = 4
+}
+
+resource "openstack_networking_port_v2" "port" {
+  count = var.instance_num
+  name = "${format("port-%02d", count.index + 10)}"
+  network_id         = "${openstack_networking_network_v2.network_1.id}"
+  admin_state_up     = "true"
+
+  fixed_ip {
+    subnet_id  = "${openstack_networking_subnet_v2.subnet_1.id}"
+    ip_address = "${format("192.168.199.%02d", count.index + 10)}"
+  }
 }
 
 # configure router
