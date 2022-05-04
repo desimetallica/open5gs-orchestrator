@@ -18,11 +18,110 @@
         daemon_reload: yes
       listen: "reload and restart"
 
+  tasks:
+    - name: Install pre-packages.
+      apt:
+        pkg:
+        - make 
+        - g++
+        - libsctp-dev 
+        - lksctp-tools
+        - curl
+
+    - name: Install pre-packages snap.
+      snap:
+        name: cmake
+        classic: yes
+
+    - name: Clone a UERANSIM repository 
+      git:
+        repo: https://github.com/aligungr/UERANSIM.git
+        dest: /opt/UERANSIM
+        clone: yes
+        update: yes
+        force: yes
+
+    - name: Build UERANSIM
+      make:
+        chdir: /opt/UERANSIM
+        params:
+          NUM_THREADS: 4
+
+    - name: Setting up gnb config file.
+      lineinfile:
+        path: /opt/UERANSIM/config/open5gs-gnb.yaml
+        state: present
+        #search_string: 'linkIp:'
+        regexp: '^linkIp'
+        line: 'linkIp: 192.168.199.10'
+
+    - name: Setting up gnb config file.
+      lineinfile:
+        path: /opt/UERANSIM/config/open5gs-gnb.yaml
+        state: present
+        regexp: '^ngapIp:'
+        line: 'ngapIp: 192.168.199.10'
+
+    - name: Setting up gnb config file.
+      lineinfile:
+        path: /opt/UERANSIM/config/open5gs-gnb.yaml
+        state: present
+        regexp: '^gtpIp:'
+        line: 'gtpIp: 192.168.199.10'
+
+    - name: Setting up amf address in config file.
+      lineinfile:
+        path: /opt/UERANSIM/config/open5gs-gnb.yaml
+        #state: present
+        regexp: '  \- address\: 127\.0\.0\.5'
+        line: '  - address: 192.168.199.11'
+
+    - name: Setting up ue config file.
+      lineinfile:
+        path: /opt/UERANSIM/config/open5gs-ue.yaml
+        state: present
+        regexp: '  - 127.0.0.1'
+        line: '  - 192.168.199.10'
+        backrefs: yes
+
+
+- hosts: 5gcore
+  #  become_user: crit
+  become: true
+
+  pre_tasks:
+    - name: Update apt cache if needed.
+      apt: update_cache=true cache_valid_time=3600
+      
+    - name: Upgrade all packages to their latest version
+      apt:
+        name: "*"
+        state: latest
+      
+  handlers:
+    - name: daemon-reload
+      ansible.builtin.systemd:
+        daemon_reload: yes
+      listen: "reload and restart"
+
     - name: restart open5gs-webui
       service:
         name: open5gs-webui
         state: restarted
       listen: "reload and restart"
+
+      
+    - name: restart open5gs-upfd.service
+      service:
+        name: open5gs-upfd
+        state: restarted
+      listen: "restart upfd"
+
+    - name: restart open5gs-amfd.service
+      service:
+        name: open5gs-amfd
+        state: restarted
+      listen: "restart amfd"
 
   tasks:
     - name: Install pre-packages.
@@ -30,6 +129,7 @@
         pkg:
         - software-properties-common
         - curl
+        - iptables-persistent
 
     - name: adding open5gs latest repository from PPA and istall its signing key on Ubuntu target.
       ansible.builtin.apt_repository:
@@ -40,6 +140,34 @@
         name: open5gs
         update_cache: yes
         
+    - name: Setting up AMF config file.
+      replace:
+        path: /etc/open5gs/amf.yaml
+        regexp: '    ngap\:\n[^\n]+' # Matches [ngap] and next line
+        replace: '    ngap:' # Replace both lines with [ngap]
+
+    - name: Updating IP on AMF config file.
+      lineinfile:
+        path: /etc/open5gs/amf.yaml
+        state: present
+        insertafter: '    ngap:'
+        line: '      - addr: 192.168.199.11'
+      notify: "restart amfd"
+
+    - name: Setting up UPF config file.
+      replace:
+        path: /etc/open5gs/upf.yaml
+        regexp: '    gtpu\:\n[^\n]+' # Matches [gtpu] and next line
+        replace: '    gtpu:' # Replace both lines with [gtpu]
+
+    - name: Updating IP on UPF config file.
+      lineinfile:
+        path: /etc/open5gs/upf.yaml
+        state: present
+        insertafter: '    gtpu:'
+        line: '      - addr: 192.168.199.11'
+      notify: "restart upfd"
+
     - name: add node_14.x source
       shell: 'curl -fsSL https://deb.nodesource.com/setup_14.x | sudo -E bash -'
 
@@ -83,3 +211,39 @@
         line: 'ExecStart=' 
       notify: "reload and restart"
 
+    - name: Iptables allow tun traffic in.
+      iptables:
+        chain: INPUT
+        source: 10.45.0.0/16
+        jump: ACCEPT
+
+    - name: Iptables setup postrouting.
+      iptables:
+        chain: POSTROUTING
+        table: nat
+        out_interface: ens3
+        jump: MASQUERADE
+
+    - name: Iptables forward traffic postrouting ogstun/ens3.
+      iptables:
+        chain: FORWARD
+        out_interface: ogstun
+        in_interface: ens3
+        jump: ACCEPT
+
+    - name: Iptables forward traffic postrouting ens3/ogstun.
+      iptables:
+        chain: FORWARD
+        out_interface: ens3
+        in_interface: ogstun
+        jump: ACCEPT
+
+    - name: Allowing ip forwarding on kernel.
+      sysctl:
+        name: net.ipv4.ip_forward
+        value: '1'
+        sysctl_set: yes
+
+    - name: Saving iptables config 
+      shell:
+        cmd: /sbin/iptables-save > /etc/iptables/rules.v4

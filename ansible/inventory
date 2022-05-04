@@ -1,8 +1,8 @@
 [5gcore]
-10.54.131.154 ansible_user=ubuntu
+10.54.131.157 ansible_user=ubuntu
 
 [UERANSIM]
-10.54.131.157 ansible_user=ubuntu
+10.54.131.154 ansible_user=ubuntu
 
 [multi:children]
 5gcore
